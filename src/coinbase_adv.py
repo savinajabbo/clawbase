@@ -1,29 +1,27 @@
 """Minimal Coinbase Advanced Trade REST client.
 
-Auth: HMAC SHA256 signature using API key + secret.
+Auth: JWT (CDP API keys — Key ID + Private key).
 
 Environment:
-- COINBASE_ADV_API_KEY
-- COINBASE_ADV_API_SECRET
+- COINBASE_ADV_API_KEY   = Key ID (e.g. organizations/{org_id}/apiKeys/{key_id} or the key ID alone)
+- COINBASE_ADV_API_SECRET = Private key (PEM string; use \\n for newlines in .env)
 
-Notes:
-- This implements the common pattern: signature = HMAC_SHA256(secret, timestamp + method + request_path + body)
-  then base64-encoded.
-- If your Coinbase key type uses a different auth scheme (e.g., JWT/CDP), tell me and I’ll adjust.
+Your "API key name", "Private key", and "Key ID" from Coinbase map as:
+- Key ID       → COINBASE_ADV_API_KEY
+- Private key  → COINBASE_ADV_API_SECRET (the PEM, with \\n for line breaks in .env)
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
-import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 import requests
+
+# JWT auth for CDP keys (Key ID + Private key)
+from coinbase import jwt_generator
 
 
 @dataclass(frozen=True)
@@ -44,16 +42,36 @@ def _require_env(name: str) -> str:
     return v
 
 
+def _normalize_pem(secret: str) -> str:
+    """Ensure PEM has real newlines so cryptography can parse it."""
+    # .env may give literal backslash-n (two chars); turn into real newlines
+    secret = secret.replace("\\n", "\n")
+    # If PEM is still one long line (no newlines), fix framing for cryptography
+    if "-----BEGIN " in secret and "\n" not in secret.strip():
+        i = secret.find("-----BEGIN ")
+        # End of BEGIN line is the next "-----" (closes "-----BEGIN ... -----")
+        k = secret.find("-----", i + 11)
+        if k == -1:
+            return secret
+        begin_line = secret[i : k + 5]
+        rest = secret[k + 5 :]
+        m = rest.find("-----END ")
+        if m == -1:
+            return secret
+        base64_part = rest[:m].replace(" ", "").replace("\n", "")
+        end_start = m
+        end_close = rest.find("-----", end_start + 9)
+        end_line = rest[end_start : end_close + 5] if end_close != -1 else rest[end_start:]
+        secret = f"{begin_line}\n{base64_part}\n{end_line}\n"
+    return secret
+
+
 def load_config() -> CoinbaseAdvConfig:
-    return CoinbaseAdvConfig(
-        api_key=_require_env("COINBASE_ADV_API_KEY"),
-        api_secret=_require_env("COINBASE_ADV_API_SECRET"),
-    )
-
-
-def _sign(secret: str, message: str) -> str:
-    digest = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
-    return base64.b64encode(digest).decode("utf-8")
+    key = _require_env("COINBASE_ADV_API_KEY")
+    secret = _require_env("COINBASE_ADV_API_SECRET")
+    if "BEGIN " in secret or "PRIVATE KEY" in secret:
+        secret = _normalize_pem(secret)
+    return CoinbaseAdvConfig(api_key=key, api_secret=secret)
 
 
 def request(
@@ -67,18 +85,15 @@ def request(
 ) -> dict[str, Any]:
     method_u = method.upper()
     body = "" if json_body is None else json.dumps(json_body, separators=(",", ":"))
-    ts = str(int(time.time()))
 
-    # Coinbase-style signature payload
-    message = f"{ts}{method_u}{request_path}{body}"
-    sig = _sign(cfg.api_secret, message)
+    # Build JWT for this request (CDP keys: Key ID + Private key)
+    jwt_uri = jwt_generator.format_jwt_uri(method_u, request_path)
+    jwt = jwt_generator.build_rest_jwt(jwt_uri, cfg.api_key, cfg.api_secret)
 
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "CB-ACCESS-KEY": cfg.api_key,
-        "CB-ACCESS-SIGN": sig,
-        "CB-ACCESS-TIMESTAMP": ts,
+        "Authorization": f"Bearer {jwt}",
     }
 
     url = cfg.base_url.rstrip("/") + request_path
@@ -91,7 +106,6 @@ def request(
         timeout=timeout_s,
     )
 
-    # Try to parse JSON either way for good error messages
     try:
         payload = r.json()
     except Exception:

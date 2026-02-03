@@ -21,7 +21,6 @@ def main(argv: list[str]) -> int:
     load_dotenv()
     cfg = load_config()
 
-    # Advanced Trade brokerage accounts endpoint
     resp = request(cfg, "GET", "/api/v3/brokerage/accounts")
 
     accounts = resp.get("accounts") or resp.get("data") or []
@@ -29,7 +28,6 @@ def main(argv: list[str]) -> int:
         print(resp)
         return 0
 
-    # Print a compact view
     for a in accounts:
         name = a.get("name") or a.get("currency") or a.get("uuid")
         uuid = a.get("uuid") or a.get("id")

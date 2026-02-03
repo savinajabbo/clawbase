@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 .env.local
+.spotify-token.json
 .DS_Store
 .pytest_cache/
 .mypy_cache/
