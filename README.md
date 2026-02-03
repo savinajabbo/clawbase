@@ -19,7 +19,13 @@ Public (no auth) example:
 python -m src.public_prices
 ```
 
+List accounts (Advanced Trade, requires API keys in `.env`):
+
+```bash
+python -m src.list_accounts
+```
+
 ## Notes
 
 - This project includes a **public** example that does not require keys.
-- If you want **authenticated** calls, tell me which Coinbase API you mean (Advanced Trade vs Coinbase API v2), and I’ll add the correct auth/signing flow.
+- Advanced Trade auth requires an API key + secret in `.env`.
